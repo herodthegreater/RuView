@@ -38,10 +38,13 @@ jobs:
           git submodule sync --recursive
           git submodule update --remote --recursive
 
+      # Only vendor/ is committed below, so only vendor/ gitlink changes count;
+      # otherwise a bump outside vendor/ makes `git commit` fail with
+      # "nothing to commit".
       - name: Check for changes
         id: check
         run: |
-          if git diff --quiet; then
+          if git diff --quiet --ignore-submodules=dirty -- vendor/; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -50,18 +53,33 @@ jobs:
             git diff --submodule=log -- vendor/ || true
           fi
 
-      - name: Create PR with updates
+      # Reuse one bot-owned branch instead of a new timestamped branch per run:
+      # an open PR is refreshed in place rather than a new branch + PR piling up
+      # every 6 hours, and an unchanged pointer set is not re-pushed.
+      - name: Create or update PR with updates
         if: steps.check.outputs.changed == 'true'
         run: |
-          BRANCH="chore/update-submodules-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH"
+          BRANCH="chore/update-submodules"
+          git checkout -B "$BRANCH"
           git add vendor/
           git commit -m "chore: update vendor submodules to latest upstream"
-          git push origin "$BRANCH"
-          gh pr create \
+          if git fetch --quiet origin "$BRANCH" 2>/dev/null && git diff --quiet FETCH_HEAD HEAD -- vendor/; then
+            echo "$BRANCH already carries these submodule pointers; not re-pushing."
+          else
+            git push --force origin "$BRANCH"
+          fi
+          EXISTING=$(gh pr list --head "$BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Open PR #$EXISTING tracks $BRANCH."
+            exit 0
+          fi
+          if ! gh pr create \
             --title "chore: update vendor submodules" \
             --body "Automated submodule update to the latest upstream commit on each submodule's tracked branch (see \`.gitmodules\`). Review the pointer diff before merging." \
             --base main \
-            --head "$BRANCH"
+            --head "$BRANCH"; then
+            echo "::error::Could not open the PR (the pointers are pushed to $BRANCH). If the error above says 'GitHub Actions is not permitted to create or approve pull requests', enable Settings > Actions > General > Workflow permissions > 'Allow GitHub Actions to create and approve pull requests'."
+            exit 1
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -46,6 +46,9 @@ concurrency:
 jobs:
   build-and-publish:
     name: build · push · smoke-test
+    # Publishes to ruvnet's Docker Hub + ghcr.io namespaces with ruvnet's
+    # DOCKERHUB_* secrets, none of which exist on forks.
+    if: github.repository == 'ruvnet/RuView'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
